@@ -2,318 +2,340 @@ from pynput.mouse import Button, Controller as MouseController
 from pynput.keyboard import Key, Controller as KeyboardController
 from pynput import keyboard as mainKeyboard
 import pyautogui
-import enum
+from enum import Enum
 from time import sleep, time
-import math
-import datetime
-from random import random
+import Quartz
 
 
-class State(enum.Enum):
+class State(Enum):
     PAUSED = 1
     QUITTING = 2
-    STARTING = 10
-    BATTLING = 11
-
-
-class Tab(enum.Enum):
-    ATTACK = 1
-    DEFENSE = 2
-    UTILITY = 3
-    ULTIMATE_WEAPON = 4
-    UNKNOWN = 5
+    RUNNING = 3
 
 
 mouse = MouseController()
 keyboard = KeyboardController()
-current_state = State.STARTING
-past_state = State.STARTING
-stop_picking_perks = False
-summary = {
-    "gem_5_rewards_claimed": 0,
-    "gem_2_rewards_claimed": 0,
-    "start_time": time(),
-    "rounds": 0
-}
-GAME_SCREEN_REGION = (660, 41, 560, 988)  # left, top, width, height
-TAB_SCREEN_REGION = (660, 971, 560, 60)
-TOWER_CENTER = (939, 320)
-GEM_DIST = 73  # (974, 394)
-NUM_GEM_CHECK_PTS = 30
-GEM_5_POS = (713, 503)
+current_state = State.PAUSED
+past_state = State.RUNNING
+game_region = ()  # x, y (of top left corner), width, height
 
-# Tabs
-ATTACK_TAB_POS = (732, 1000)
-DEFENSE_TAB_POS = (869, 1000)
-UTILITY_TAB_POS = (1008, 1000)
-UW_TAB_POS = (1150, 1000)
-current_tab = Tab.UNKNOWN
+# times
+jump_time = 0
+high_jump_time = 0
+dash_time = 0
+rage_time = 0
+minion_time = 0
+check_chest_hunter_time = 0
+check_bonus_stage_time = 0
 
-# Upgrades
-UPGRADE_1_POS = (815, 759)
-UPGRADE_2_POS = (1184, 759)
-UPGRADE_3_POS = (815, 869)
-UPGRADE_4_POS = (1184, 869)
-UPGRADE_5_POS = (815, 969)
-UPGRADE_6_POS = (1184, 969)
+# location offsets
+jump_offset = (412, 50)
+dash_offset = (93, 585)
+rage_offset = (690, 128)
+chest_hunter_close_offset = (338, 598)
+chest_hunter_border_offset_1 = (3, 33)
+chest_hunter_border_offset_2 = (337, 31)
+chest_hunter_border_offset_3 = (2, 114)
+bonus_stage_border_offset_1 = (259, 196)
+bonus_stage_border_offset_2 = (259, 473)
+bonus_stage_swipe_left_offsets = [(302, 539), (302, 488)]
+bonus_stage_swipe_right_offsets = [(526, 539), (526, 491)]
+bonus_stage_close_offset = (472, 492)
+bonus_stage_start_offset = (443, 75)
+menu_offset = (68, 85)
+minion_start_offset = (205, 157)
+minion_tab_offset = (208, 600)
+menu_close_offset = (361, 604)
 
-# Times
-gem_5_start_time = 0
-gem_2_start_time = 0
-round_time = time()
+# pixel color values
+chest_hunter_border_color = (220, 215, 205)
+chest_hunter_saver_color = (252, 236, 79)
+close_color = (165, 33, 22)  # (140, 28, 19)
+# bonus_stage_border_color = (206, 163, 123)
+bonus_stage_border_color = (186, 142, 104)
+bonus_stage_start_color = (68, 150, 169)
 
 # Intervals (seconds)
-gem_5_int = 10 * 60  # 10 minutes
-gem_2_int = 15 * 60  # 15 minutes
-restart_int = 3
-force_restart_int = 100
-gem_2_check_after = 10
+jump_int = .08  # 20/second
+high_jump_int = 3
+dash_int = 3
+rage_int = 20
+check_bonus_stage_int = 20
+check_chest_hunter_int = 20
+minion_int = 600  # 10 mins
 
-# Assets
-ASSETS_PREFIX = "./assets/"
-ASSETS_FILE_TYPE = ".png"
-
-GEM_5_BUTTON = "gem_5_button"
-GEM_5_CLAIM_BUTTON = "gem_5_claim_button"
-CLAIM_REWARD_BUTTON = "claim_reward_button"
-GEM_2_BUTTONS = [f"gem_2_button_{x}" for x in range(4)]
-RETRY_BUTTON = "retry_button"
-END_ROUND_BUTTON = "end_round_button"
-NOT_RESPONDING_WAIT = "not_responding_wait"
-
-# Colors
-AFFORDABLE_UPGRADE = (17, 58, 93)
-
-
-# Perks
-class Perk:
-    priority: int
-    img: str
-    desc: str
-
-    def __init__(self, priority, img, desc):
-        self.img = img
-        self.desc = desc
-        self.priority = priority
-
-
-PERK_POS = (712, 170, 122, 219)  # left, top, width, height
-NEW_PERK_BUTTON = "new_perk_button"
-CHOOSE_ANOTHER_PERK = "choose_another_perk"
-PERK_EXIT_BUTTON = "perk_exit_button"
-PERKS = [
-    Perk(7, "perk_common_1", "x max health"),
-    Perk(12, "perk_common_2", "x damage"),
-    Perk(12, "perk_common_3", "x health regen"),
-    Perk(4, "perk_common_4", "x all coin bonuses"),
-    Perk(12, "perk_common_5", "bounce shot +2"),
-    Perk(12, "perk_common_6", "interest x"),
-    Perk(12, "perk_common_7", "land mine damage xx"),
-    Perk(7, "perk_common_8", "orbs +1"),
-    Perk(11, "perk_common_9", "free upgrade chance for all +x%"),
-    Perk(8, "perk_common_10", "defense percent +x%"),
-    Perk(5, "perk_common_11", "perk wave requirement -x%"),
-    Perk(13, "perk_common_12", "unlock a random ultimate weapon"),
-    Perk(3, "perk_common_13", "increase max game speed by +x"),
-    # Perk(12, "perk_uw_1", "4 more smart missiles"),
-    # Perk(12, "perk_uw_2", "swamp radius x1.5"),
-    # Perk(12, "perk_uw_3", "+1 wave on death wave"),
-    Perk(2, "perk_uw_4", "golden tower bonus x1.5"),
-    # Perk(12, "perk_uw_5", "chain lightning damage x2"),
-    Perk(8, "perk_uw_6", "chrono field radius x1.5"),
-    # Perk(12, "perk_uw_7", "extra set of inner mines"),
-    Perk(13, "perk_tradeoff_1", "x tower damage, but bosses have x8 health"),
-    Perk(1, "perk_tradeoff_2", "x coins, but tower max health -70.0%"),
-    Perk(10, "perk_tradeoff_3", "enemies have -x% health, but tower health regen and lifesteal -90%"),
-    Perk(6, "perk_tradeoff_4", "enemies damage -50%, but tower damage -50%"),
-    # Perk(9, "perk_tradeoff_5", "ranged enemies attach distance reduced, but ranged enemies damage x3"),
-    # Perk(100, "perk_tradeoff_6", "enemies speed -40%, but enemies damage x2.5"),
-    # Perk(100, "perk_tradeoff_7", "x12.00 cash per wave, but enemy kill doesn't give cash"),
-    # Perk(100, "perk_tradeoff_8", "tower health regen x8.00, but tower max health -60%"),
-    Perk(12, "perk_tradeoff_9", "boss health -70.0%, but boss speed +50%"),
-    # Perk(100, "perk_tradeoff_10", "lifesteal x2.50, but knockback force -70%"),
+using_built_in_display = True
+chest_hunter_offsets = [
+    (145, 265), (223, 265), (301, 265), (380, 265), (458, 265), (534, 265), (611, 265), (687, 265),
+    (145, 343), (223, 343), (301, 343), (380, 343), (458, 343), (534, 343), (611, 343), (687, 343),
+    (145, 421), (223, 421), (301, 421), (380, 421), (458, 421), (534, 421), (611, 421), (687, 421),
+    (223, 500), (301, 500), (380, 500), (458, 500), (534, 500), (611, 500)
 ]
 
 
+def listen_to_input():
+    listener = mainKeyboard.Listener(on_release=on_release)
+    listener.start()
+
+
 def on_press(key):
-    a = 1  # This is a no-op
+    if key == Key.up:
+        pyautogui.screenshot(region=game_region).save(f"./recordings/jump-states/{time()}.png")
 
 
 def on_release(key):
-    global current_state, past_state, current_tab
-    if key == Key.ctrl_r:
+    global current_state, past_state
+    if key == Key.space:
         if current_state == State.PAUSED:
             print("Un-pausing game!")
             change_state(past_state)
-            current_tab = Tab.UNKNOWN
         else:
             print("Pausing game!")
             change_state(State.PAUSED)
-    elif key == Key.alt_gr:
+    elif key == Key.esc:
         print("Quitting!")
         change_state(State.QUITTING)
-    elif key == Key.shift_r or key == Key.shift_l:
-        total_time = time() - summary["start_time"]
-        print("\nPrinting run summary")
-        print("----------------------------------------------------------------------------")
-        print(summary)
-        print("Total run time: ", total_time, " seconds")
-        print("----------------------------------------------------------------------------")
 
 
 def change_state(new_state):
-    global current_state, past_state
+    global current_state, past_state, game_region
     past_state = current_state
     current_state = new_state
+    if past_state is State.PAUSED:
+        verify_window()
 
 
-def click(pos, clicks=1, wait=0.25):
+def click(pos, clicks=1, wait=0.0):
     mouse.position = pos
     mouse.click(button=Button.left, count=clicks)
-    sleep(wait)
+    if wait > 0:
+        sleep(wait)
 
 
-def find_img(img_file_name, confidence=None, full_screen=False, region=GAME_SCREEN_REGION):
-    img_path = ASSETS_PREFIX + img_file_name + ASSETS_FILE_TYPE
-    if confidence is None:
-        if full_screen:
-            return pyautogui.locateCenterOnScreen(img_path)
-        else:
-            return pyautogui.locateCenterOnScreen(img_path, region=region)
+def find_window(name):
+    windows = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListExcludeDesktopElements | Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
+    for window in windows:
+        if window.get(Quartz.kCGWindowOwnerName) == name:
+            bounds = window.get(Quartz.kCGWindowBounds)
+            return int(bounds["X"]), int(bounds["Y"]), int(bounds["Width"]), int(bounds["Height"])
+
+    print(f"Could not find window '{name}'!")
+    exit()
+
+
+def verify_window(name="Idle Slayer", required_dims=(831, 651)):
+    global game_region, using_built_in_display
+    using_built_in_display = Quartz.CGMainDisplayID() == 1  # I am not sure if this is different for external displays yet
+    game_region = find_window(name)
+    dims = game_region[2:]
+    if dims != required_dims:
+        print("Window is not correctly sized!")
+        print(f"Current dimensions: {dims}")
+        print(f"Expected dimensions: {required_dims}")
+        exit()
+
+
+def offset_to_screen(offset, double=False):
+    if double:
+        return (game_region[0] + offset[0]) * 2, (game_region[1] + offset[1]) * 2
     else:
-        return pyautogui.locateCenterOnScreen(img_path, confidence=confidence, region=region)
+        return game_region[0] + offset[0], game_region[1] + offset[1]
 
 
-def check_gem_5():
-    click(GEM_5_POS)
+def jump():
+    click(offset_to_screen(jump_offset))
 
 
-def check_gem_2():
-    for i in range(NUM_GEM_CHECK_PTS):
-        angle = (360 / NUM_GEM_CHECK_PTS) * i
-        pos_x = TOWER_CENTER[0] + (GEM_DIST * math.cos(math.radians(angle)))
-        pos_y = TOWER_CENTER[1] + (GEM_DIST * math.sin(math.radians(angle)))
-        click((pos_x, pos_y), wait=0)
+def high_jump():
+    sleep(.5)
+    mouse.position = offset_to_screen(jump_offset)
+    mouse.press(Button.left)
+    sleep(.3)
+    mouse.release(Button.left)
 
 
-def check_game_over(with_restart=True):
-    global current_state, round_time, summary, current_tab, stop_picking_perks
-    pos = find_img(RETRY_BUTTON)
-    if pos is not None:
-        sleep(1)
-        round_time = time()
-
-        stats_pos = find_img()
-
-        click(pos)
-
-        # doing short reset because uncleared enemies can cause loss of Second Wind
-        if with_restart:
-            sleep(2)
-            restart_round()
-            check_game_over(with_restart=False)
-
-        summary["rounds"] += 1
-        change_state(State.STARTING)
-        current_tab = Tab.UNKNOWN
-        stop_picking_perks = False
-
-    pos = find_img(NOT_RESPONDING_WAIT)
-    if pos is not None:
-        sleep(3)
-        click(pos)
-        sleep(3)
+def dash():
+    sleep(.1)
+    click(offset_to_screen(dash_offset), clicks=2)
 
 
-def set_tab(tab):
-    global current_tab
-    if current_tab is not tab:
-        if current_tab is Tab.UNKNOWN:
-            click(UW_TAB_POS)
-
-        if tab is Tab.ATTACK:
-            click(ATTACK_TAB_POS)
-            current_tab = Tab.ATTACK
-        elif tab is Tab.DEFENSE:
-            click(DEFENSE_TAB_POS)
-            current_tab = Tab.DEFENSE
-        elif tab is Tab.UTILITY:
-            click(UTILITY_TAB_POS)
-            current_tab = Tab.UTILITY
+def rage():
+    sleep(.1)
+    click(offset_to_screen(rage_offset), clicks=1)
 
 
-def play_round():
-    global current_state
-
-    set_tab(Tab.DEFENSE)
-    sleep(.25)
-    click(UPGRADE_1_POS)
+def pixel_color_in_range(pixel_color, expected_color, tolerance=10):
+    r, g, b = pixel_color[:3]
+    ex_r, ex_g, ex_b = expected_color
+    return (abs(r - ex_r) <= tolerance) and (abs(g - ex_g) <= tolerance) and (abs(b - ex_b) <= tolerance)
 
 
-def restart_round():
-    global keyboard
-    keyboard.tap(Key.esc)
+def check_pixels_match(pix_positions, expected_color, tolerance=10):
+    screenshot = pyautogui.screenshot(region=game_region)
+    return all(pixel_color_in_range(screenshot.getpixel(pos), expected_color, tolerance) for pos in pix_positions)
 
-    end_round_pos = find_img(END_ROUND_BUTTON)
-    if end_round_pos:
-        click(end_round_pos)
+
+def check_chest_hunter():
+    return check_pixels_match(
+        [chest_hunter_border_offset_1, chest_hunter_border_offset_2, chest_hunter_border_offset_3],
+        chest_hunter_border_color, tolerance=30)
+
+
+def check_chest_hunter_over():
+    return check_pixels_match([chest_hunter_close_offset], close_color)
+
+
+def play_deploy_minions():
+    click(offset_to_screen(menu_offset), wait=0.5)
+    click(offset_to_screen(menu_offset), wait=0.5)
+    click(offset_to_screen(minion_tab_offset), wait=0.5)
+    click(offset_to_screen(minion_tab_offset), wait=0.5)
+    click(offset_to_screen(minion_start_offset), wait=0.5)
+    click(offset_to_screen(minion_start_offset), wait=0.5)
+    click(offset_to_screen(minion_start_offset), wait=0.5)
+    click(offset_to_screen(minion_start_offset), wait=0.5)
+    click(offset_to_screen(menu_close_offset), wait=0.5)
+    click(offset_to_screen(menu_close_offset), wait=0.5)
+
+
+def play_chest_hunter():
+    sleep(3)  # gives time for saver to be located
+    num_chests_opened = 0
+    while not check_chest_hunter_over() and current_state is State.RUNNING:
+        for pos in chest_hunter_offsets:
+            click(offset_to_screen(pos))
+            num_chests_opened += 1
+            sleep(1.5)
+            if check_chest_hunter_over() or current_state is not State.RUNNING:
+                break
+            if num_chests_opened == 2:
+                screenshot = pyautogui.screenshot(region=game_region)
+                saver_location = None
+                for i, pix in enumerate(screenshot.getdata()):
+                    if pix[1] > 100 and pix[:3] == chest_hunter_saver_color:
+                        saver_location = (i % game_region[2]) + 10, (i // game_region[2]) + 10
+                        break
+                if saver_location is not None:
+                    sleep(2)
+                    click(offset_to_screen(saver_location), clicks=1)
+                    click(offset_to_screen(saver_location), clicks=1)
+
+    # pyautogui.screenshot(region=game_region).save(f"/Users/jacobwilliams/dev/IdleSlayer/recordings/chest-hunt-results/{time()}.png")
+
+    while check_chest_hunter_over() and current_state is State.RUNNING:
+        click(offset_to_screen(chest_hunter_close_offset), clicks=2)
+
+
+def check_bonus_stage():
+    return check_pixels_match([bonus_stage_border_offset_1, bonus_stage_border_offset_2], bonus_stage_border_color)
+
+
+def clear_box():
+    for i in range(2):
+        sleep(.25)
+        mouse.position = offset_to_screen(bonus_stage_swipe_left_offsets[i])
+        mouse.press(Button.left)
+        sleep(.25)
+        mouse.move(277, 0)
+        sleep(.25)
+        mouse.release(Button.left)
+        sleep(.25)
+
+        if not check_bonus_stage():
+            break
+
+        mouse.position = offset_to_screen(bonus_stage_swipe_right_offsets[i])
+        mouse.press(Button.left)
+        sleep(.25)
+        mouse.move(-277, 0)
+        sleep(.25)
+        mouse.release(Button.left)
+        sleep(.25)
+
+        if not check_bonus_stage():
+            break
+
+
+def play_bonus_stage():
+    clear_box()
+    while check_bonus_stage() and current_state is State.RUNNING:
+        clear_box()
+
+    sleep(50)
+    click(offset_to_screen(bonus_stage_close_offset))
     sleep(1)
+    click(offset_to_screen(bonus_stage_close_offset))
+    sleep(1)
+    click(offset_to_screen(bonus_stage_close_offset))
 
 
-def check_perk():
-    global stop_picking_perks
-    pos = find_img(NEW_PERK_BUTTON)
-    if pos is not None:
-        click(pos)
-        sleep(1)
-        more_perks_to_select = True
-        while more_perks_to_select:
-            perk_to_select = None
-            for perk in PERKS:
-                pos = find_img(perk.img, confidence=.7, region=PERK_POS)
-                if pos is not None:
-                    print()
-                if pos is not None and (perk_to_select is None or perk.priority < perk_to_select[0].priority):
-                    perk_to_select = (perk, pos)
+def play_bonus_stage_improved_v2():
+    clear_box()
+    while check_bonus_stage() and current_state is State.RUNNING:
+        clear_box()
+    start_time = time()
+    jump_time = 0
+    jump_int = .75
+    while current_state is State.RUNNING and time() - start_time < 300:
+        screenshot = pyautogui.screenshot(region=game_region)
+        if pixel_color_in_range(screenshot.getpixel(bonus_stage_close_offset), close_color):
+            while pixel_color_in_range(screenshot.getpixel(bonus_stage_close_offset), close_color):
+                click(offset_to_screen(bonus_stage_close_offset), clicks=2)
+                sleep(1)
+                screenshot = pyautogui.screenshot(region=game_region)
+            break
 
-            if perk_to_select is None or perk_to_select[0].priority == 100:
-                stop_picking_perks = True
-                more_perks_to_select = False
-            else:
-                click(perk_to_select[1])
-                sleep(.5)
-                pos = find_img(CHOOSE_ANOTHER_PERK)
-                if pos is None:
-                    more_perks_to_select = False
-        pos = find_img(PERK_EXIT_BUTTON)
-        if pos is not None:
-            click(pos)
-            sleep(.5)
+        if time() - jump_time > jump_int:
+            click(offset_to_screen(dash_offset))
 
 
 def play():
-    global current_state
-    listener = mainKeyboard.Listener(
-        on_press=on_press,
-        on_release=on_release)
-    listener.start()
+    global current_state, game_region, jump_time, dash_time, rage_time, check_chest_hunter_time, check_bonus_stage_time, high_jump_time, minion_time
 
-    sleep(3)
+    listen_to_input()
+    verify_window()
+    print(f"Game Paused!!")
     while current_state is not State.QUITTING:
         if current_state is not State.PAUSED:
-            # print('Mouse: {0}, Color: {1}'.format(mouse.position, pyautogui.pixel(*mouse.position)))
+            # pos_x, pos_y = mouse.position
+            # pixel_pos = pos_x, pos_y
+            # if using_built_in_display:
+            #     pixel_pos = pos_x * 2, pos_y * 2
+            # print(f"Mouse: X={pos_x - game_region[0]}, Y={pos_y - game_region[1]} Color: {pyautogui.pixel(*pixel_pos)}")
             # sleep(1)
 
             t = time()
-            if t - round_time > restart_int:
-                check_game_over()
-            if t - round_time > gem_2_check_after:
-                check_gem_2()
-            if t - gem_5_start_time > gem_5_int:
-                check_gem_5()
-            if not stop_picking_perks:
-                check_perk()
-            play_round()
+            if t - jump_time > jump_int:
+                jump()
+                jump_time = t
+            if t - high_jump_time > high_jump_int:
+                high_jump()
+                high_jump_time = t
+            if t - dash_time > dash_int:
+                dash()
+                dash_time = t
+            if t - rage_time > rage_int:
+                rage()
+                rage_time = t
+            if t - check_bonus_stage_time > check_bonus_stage_int:
+                if check_bonus_stage():
+                    # exit()
+                    play_bonus_stage_improved_v2()
+                check_bonus_stage_time = t
+            if t - check_chest_hunter_time > check_chest_hunter_int:
+                if check_chest_hunter():
+                    play_chest_hunter()
+                check_chest_hunter_time = t
+            if t - minion_time > minion_int:
+                play_deploy_minions()
+                minion_time = t
 
 
 play()
+
+# sleep(2)
+# verify_window()
+# listen_to_input()
+# current_state = State.RUNNING
+# play_bonus_stage_improved_v2()
